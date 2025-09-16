@@ -1,13 +1,13 @@
 [package]
 license = "MIT"
-edition = "2021"
-version = "0.1.0"
+edition = "2024"
+version = "0.0.1"
 name = "whisper_cli"
 readme = "README.md"
-homepage = "https://github.com/m1guelpf/whisper-cli-rs"
+homepage = "https://github.com/aramrw/whisper-cli"
 description = "A command line interface for whisper-rs"
-repository = "https://github.com/m1guelpf/whisper-cli-rs"
-authors = ["Miguel Piedrafita <soy@miguelpiedrafita.com>"]
+repository = "https://github.com/aramrw/whisper-cli"
+authors = ["Miguel Piedrafita <soy@miguelpiedrafita.com>", "Aram Samifani <>"]
 keywords = ["whisper", "openai", "cli", "transcribe"]
 categories = ["command-line-utilities"]
 
@@ -20,7 +20,7 @@ num = "0.4.1"
 dirs = "5.0.1"
 anyhow = "1.0.75"
 indicatif = "0.17.6"
-whisper-rs = "0.8.0"
+whisper-rs = "0.15.1"
 futures-util = "0.3.28"
 uuid = { version = "1.4.1", features = ["v4"] }
 tokio = { version = "1.32.0", features = ["full"] }
@@ -28,3 +28,7 @@ clap = { version = "4.4.3", features = ["derive"] }
 serde = { version = "1.0.188", features = ["derive"] }
 reqwest = { version = "0.11.20", features = ["blocking", "stream"] }
 audrey = { version = "0.3.0", default-features = false, features = ["wav"] }
+
+[patch.crates-io]
+whisper-rs-sys = { path = "crates/whisper-rs/sys" }
+whisper-rs = { path = "crates/whisper-rs/" }

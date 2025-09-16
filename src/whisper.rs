@@ -1,11 +1,5 @@
-use crate::{
-    ffmpeg_decoder,
-    model::Model,
-    transcript::{Transcript, Utternace},
-};
-use anyhow::{anyhow, Result};
-use std::{path::Path, time::Instant};
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext};
+use crate::model::Model;
+use whisper_rs::{WhisperContext, WhisperContextParameters};
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
 pub enum Language {
@@ -320,7 +314,7 @@ impl From<Language> for &str {
 }
 
 pub struct Whisper {
-    ctx: WhisperContext,
+    pub ctx: WhisperContext,
     lang: Option<Language>,
 }
 
@@ -328,87 +322,15 @@ impl Whisper {
     pub async fn new(model: Model, lang: Option<Language>) -> Self {
         model.download().await;
 
+        let model_path = model.get_path();
+        let model_path_str = model_path.to_str().unwrap();
         Self {
             lang,
-            ctx: WhisperContext::new(model.get_path().to_str().unwrap())
-                .expect("Failed to load model."),
+            ctx: WhisperContext::new_with_params(
+                model_path_str,
+                WhisperContextParameters::default(),
+            )
+            .expect("Failed to load model."),
         }
-    }
-
-    pub fn transcribe<P: AsRef<Path>>(
-        &mut self,
-        audio: P,
-        translate: bool,
-        word_timestamps: bool,
-    ) -> Result<Transcript> {
-        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-
-        params.set_translate(translate);
-        params.set_print_special(false);
-        params.set_print_progress(false);
-        params.set_print_realtime(false);
-        params.set_print_timestamps(false);
-        params.set_token_timestamps(word_timestamps);
-        params.set_language(self.lang.map(Into::into));
-
-        let audio = ffmpeg_decoder::read_file(audio)?;
-
-        let st = Instant::now();
-        let mut state = self.ctx.create_state().expect("failed to create state");
-        state.full(params, &audio).expect("failed to transcribe");
-
-        let num_segments = state.full_n_segments().expect("failed to get segments");
-        if num_segments == 0 {
-            return Err(anyhow!("No segments found"));
-        };
-
-        let mut words = Vec::new();
-        let mut utterances = Vec::new();
-        for s in 0..num_segments {
-            let text = state
-                .full_get_segment_text(s)
-                .map_err(|e| anyhow!("failed to get segment due to {:?}", e))?;
-            let start = state
-                .full_get_segment_t0(s)
-                .map_err(|e| anyhow!("failed to get segment due to {:?}", e))?;
-            let stop = state
-                .full_get_segment_t1(s)
-                .map_err(|e| anyhow!("failed to get segment due to {:?}", e))?;
-
-            utterances.push(Utternace { text, start, stop });
-
-            if !word_timestamps {
-                continue;
-            }
-
-            let num_tokens = state
-                .full_n_tokens(s)
-                .map_err(|e| anyhow!("failed to get segment due to {:?}", e))?;
-
-            for t in 0..num_tokens {
-                let text = state
-                    .full_get_token_text(s, t)
-                    .map_err(|e| anyhow!("failed to get token due to {:?}", e))?;
-                let token_data = state
-                    .full_get_token_data(s, t)
-                    .map_err(|e| anyhow!("failed to get token due to {:?}", e))?;
-
-                if text.starts_with("[_") {
-                    continue;
-                }
-
-                words.push(Utternace {
-                    text,
-                    start: token_data.t0,
-                    stop: token_data.t1,
-                });
-            }
-        }
-
-        Ok(Transcript {
-            utterances,
-            processing_time: Instant::now().duration_since(st),
-            word_utterances: if word_timestamps { Some(words) } else { None },
-        })
     }
 }

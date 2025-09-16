@@ -55,8 +55,7 @@ async fn main() {
 
     let mut whisper = Whisper::new(Model::new(args.model), args.lang).await;
     let transcript = whisper
-        .transcribe(audio, args.translate, args.karaoke)
-        .unwrap();
+        .transcribe(audio, args.translate, args.karaoke).expect("failed to transcribe audio");
 
     write_to(
         audio.with_file_name(format!("{file_name}.txt")),

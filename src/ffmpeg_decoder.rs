@@ -43,5 +43,10 @@ fn use_ffmpeg<P: AsRef<Path>>(input_path: P) -> Result<Vec<i16>> {
 
 pub fn read_file<P: AsRef<Path>>(audio_file_path: P) -> Result<Vec<f32>> {
     let audio_buf = use_ffmpeg(&audio_file_path)?;
-    Ok(whisper_rs::convert_integer_to_float_audio(&audio_buf))
+    let mut output = [0.0];
+    whisper_rs::convert_integer_to_float_audio(&audio_buf, &mut output)?;
+    if output != [0.0] {
+        return Ok(output.to_vec());
+    }
+    return Err(anyhow!("could not convert integer to float audio"));
 }
