@@ -20,7 +20,7 @@ num = "0.4.1"
 dirs = "5.0.1"
 anyhow = "1.0.75"
 indicatif = "0.17.6"
-whisper-rs = "0.15.1"
+whisper-rs = {version = "0.15.1", features = ["vulkan"]}
 futures-util = "0.3.28"
 uuid = { version = "1.4.1", features = ["v4"] }
 tokio = { version = "1.32.0", features = ["full"] }
@@ -31,4 +31,4 @@ audrey = { version = "0.3.0", default-features = false, features = ["wav"] }
 
 [patch.crates-io]
 whisper-rs-sys = { path = "crates/whisper-rs/sys" }
-whisper-rs = { path = "crates/whisper-rs/" }
+# whisper-rs = { path = "crates/whisper-rs/" }

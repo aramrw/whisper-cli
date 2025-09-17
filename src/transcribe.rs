@@ -1,14 +1,10 @@
-// transcribe.rs
-use crate::{
-    ffmpeg_decoder,
-    transcript::{Transcript, Utternace},
-    Whisper,
-};
-use anyhow::{anyhow, Result};
 use std::{path::Path, time::Instant};
-use whisper_rs::{
-    FullParams, SamplingStrategy, WhisperTokenData,
-};
+
+// transcribe.rs use crate::{ CLI, Whisper, ffmpeg_decoder, transcript::{Transcript, Utternace}, }; use anyhow::{Result, anyhow}; use std::{path::Path, time::Instant};
+use whisper_rs::{FullParams, SamplingStrategy, WhisperTokenData};
+use anyhow::{Result, anyhow};
+
+use crate::{ffmpeg_decoder, Transcript, Utternace, Whisper, CLI};
 
 impl Whisper {
     pub fn transcribe<P: AsRef<Path>>(
@@ -18,24 +14,28 @@ impl Whisper {
         word_timestamps: bool,
     ) -> Result<Transcript> {
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        let lang = match CLI.lang {
+            Some(lang) => match lang {
+                crate::Language::Spanish => "es",
+                _ => "idk",
+            },
+            None => "es",
+        };
 
-        params.set_translate(translate);
+        params.set_language(Some(lang));
+
+        params.set_translate(false);
         params.set_print_special(false);
-        params.set_print_progress(false);
+        params.set_print_progress(true);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
-        // Note: The new API integrates token timestamps differently.
-        // We enable it by iterating over tokens later.
-        // params.set_token_timestamps(word_timestamps); // This function may have been removed or changed.
-
         // This part should work if ffmpeg_decoder::read_file returns Vec<f32>
         let audio = ffmpeg_decoder::read_file(audio)?;
 
         let st = Instant::now();
         let mut state = self.ctx.create_state().expect("failed to create state");
+        eprintln!("audio.len() = {}", audio.len());
         state.full(params, &audio).expect("failed to transcribe");
-
-        // --- START OF MIGRATED CODE ---
 
         let mut words = Vec::new();
         let mut utterances = Vec::new();
