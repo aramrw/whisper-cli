@@ -1,4 +1,6 @@
-> This project attempts to build a simple Whisper CLI with Rust, to replace the base Python one. It uses [whisper.cpp](https://github.com/ggerganov/whisper.cpp) under the hood, making it significantly faster on M1 systems.
+#### forked from: https://github.com/m1guelpf/whisper-cli-rs
+> This project attempts to build a simple Whisper CLI with Rust, to replace the base [python one](https://github.com/openai/whisper).
+> It uses [whisper.cpp](https://github.com/ggerganov/whisper.cpp) under the hood...
 
 
 ## Build
