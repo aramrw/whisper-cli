@@ -19,6 +19,10 @@ Close & Re-open the terminal to test it by typing `whisper --help`. It should ou
 
 ## Usage
 
+```nushell
+~/programs/whisper-cli-rs/target/release/whisper --lang es --model medium `ded note 20 español.mp4`
+```
+
 ```bash
 $ whisper --help
 Generate a transcript of an audio file using the Whisper speech-to-text engine. The transcript will be saved as a .txt, .vtt, and .srt file in the same directory as the audio file.
