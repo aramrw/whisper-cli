@@ -18,11 +18,12 @@ Put the `whisper` binary in `/usr/local/bin` on Unix systems (Mac/Linux) & make 
 Close & Re-open the terminal to test it by typing `whisper --help`. It should output the following.
 
 ## Usage
-
+### nushell
 ```nushell
 ~/programs/whisper-cli-rs/target/release/whisper --lang es --model medium `ded note 20 español.mp4`
 ```
 
+### Arguments
 ```bash
 $ whisper --help
 Generate a transcript of an audio file using the Whisper speech-to-text engine. The transcript will be saved as a .txt, .vtt, and .srt file in the same directory as the audio file.
