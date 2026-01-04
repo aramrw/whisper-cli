@@ -15,10 +15,13 @@ fn use_ffmpeg<P: AsRef<Path>>(input_path: P) -> Result<Vec<i16>> {
                 .as_ref()
                 .to_str()
                 .ok_or_else(|| anyhow!("invalid path"))?,
+            // remaples to 16khz (required by whisper)
             "-ar",
             "16000",
+            // mono
             "-ac",
             "1",
+            // Encodes the output as PCM 16-bit little-endian (standard raw WAV)
             "-c:a",
             "pcm_s16le",
             (temp_file.to_str().unwrap()),
