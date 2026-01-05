@@ -2,6 +2,7 @@ use crate::utils::download_file;
 use dirs::cache_dir;
 use std::{fmt::Display, fs, path::PathBuf};
 
+/// whisper model size
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
 pub enum Size {
     #[clap(name = "tiny.en")]
@@ -27,12 +28,12 @@ pub enum Size {
 }
 
 impl Size {
+    /// caches the selected model in the system cache folder
     pub fn get_path(self) -> PathBuf {
         let mut path = cache_dir().expect("Could not find cache directory");
-        path.push("whisper");
-        path.push("models");
-        path.push(format!("{self}.bin"));
-
+        path.join("whisper")
+            .join("models")
+            .join(format!("{self}.bin"));
         path
     }
 
@@ -58,7 +59,6 @@ impl Display for Size {
             Self::Large => "large",
             Self::LargeV1 => "large-v1",
         };
-
         write!(f, "{key}")
     }
 }
