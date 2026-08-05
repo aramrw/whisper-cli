@@ -61,6 +61,14 @@ struct Args {
     /// Generate timestamps for each word
     #[clap(long, default_value = "false")]
     karaoke: bool,
+
+    /// Print transcript directly to terminal stdout
+    #[clap(short = 's', long, default_value = "false")]
+    stdout: bool,
+
+    /// Skip writing .txt, .vtt, and .srt files to disk
+    #[clap(long, default_value = "false")]
+    no_files: bool,
 }
 
 fn create_transcriber(args: &Args) -> Result<Box<dyn Transcriber>> {
@@ -137,19 +145,25 @@ async fn main() -> Result<()> {
         .transcribe(audio, args.translate, args.karaoke)
         .await?;
 
-    write_to(
-        audio.with_file_name(format!("{file_name}.txt")),
-        &transcript.as_text(),
-    );
-    write_to(
-        audio.with_file_name(format!("{file_name}.vtt")),
-        &transcript.as_vtt(),
-    );
-    write_to(
-        audio.with_file_name(format!("{file_name}.srt")),
-        &transcript.as_srt(),
-    );
+    if args.stdout {
+        println!("{}", transcript.as_text());
+    }
 
-    println!("Success! Transcription completed in {:?}", transcript.processing_time);
+    if !args.no_files && !args.stdout {
+        write_to(
+            audio.with_file_name(format!("{file_name}.txt")),
+            &transcript.as_text(),
+        );
+        write_to(
+            audio.with_file_name(format!("{file_name}.vtt")),
+            &transcript.as_vtt(),
+        );
+        write_to(
+            audio.with_file_name(format!("{file_name}.srt")),
+            &transcript.as_srt(),
+        );
+        println!("Success! Transcription completed in {:?}", transcript.processing_time);
+    }
+
     Ok(())
 }

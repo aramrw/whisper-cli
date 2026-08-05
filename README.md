@@ -77,7 +77,14 @@ whisper --translate audio.mp3
 whisper --karaoke audio.mp3
 ```
 
-### 5. Use a Local / Self-Hosted Endpoint (Ollama / Faster-Whisper / LocalAI)
+### 5. Print Directly to Terminal (No Files Created)
+```bash
+whisper --stdout audio.mp3
+# or short form:
+whisper -s audio.mp3
+```
+
+### 6. Use a Local / Self-Hosted Endpoint (Ollama / Faster-Whisper / LocalAI)
 ```bash
 whisper --provider custom --api-url http://localhost:8000/v1 audio.wav
 ```
