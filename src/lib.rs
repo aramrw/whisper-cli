@@ -1,9 +1,9 @@
-mod ffmpeg_decoder;
-mod model;
-mod transcript;
-mod utils;
-mod whisper;
+pub mod provider;
+pub mod transcript;
+pub mod utils;
 
-pub use model::{Model, Size};
+pub use provider::{
+    custom::CustomApiProvider, deepgram::DeepgramProvider, groq::GroqProvider,
+    openai::OpenAiProvider, Transcriber,
+};
 pub use transcript::{Transcript, Utternace};
-pub use whisper::{Language, Whisper};
