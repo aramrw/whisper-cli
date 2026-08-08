@@ -78,7 +78,7 @@ impl Transcriber for CustomApiProvider {
             .to_string();
 
         let stream = FramedRead::new(file, BytesCodec::new());
-        let file_part = Part::stream(reqwest::Body::wrap_stream(stream)).file_name(file_name);
+        let file_part = Part::stream(reqwest::Body::wrap_stream(stream)).file_name(file_name.clone());
 
         let endpoint_suffix = if translate {
             "/audio/translations"
@@ -112,7 +112,35 @@ impl Transcriber for CustomApiProvider {
         }
 
         let st = Instant::now();
-        let res = req.send().await?;
+        let mut res = req.send().await?;
+
+        // Fallback to /inference if /v1/audio/transcriptions is not found (whisper-server default)
+        if res.status() == reqwest::StatusCode::NOT_FOUND && endpoint.contains("/v1/audio/") {
+            let base_url = self.api_url.trim_end_matches('/').trim_end_matches("/v1");
+            let alt_endpoint = format!("{base_url}/inference");
+            
+            let file_alt = File::open(audio_path).await?;
+            let stream_alt = FramedRead::new(file_alt, BytesCodec::new());
+            let file_part_alt = Part::stream(reqwest::Body::wrap_stream(stream_alt)).file_name(file_name.clone());
+            
+            let mut form_alt = Form::new()
+                .part("file", file_part_alt)
+                .text("model", self.model.clone())
+                .text("response_format", "verbose_json");
+            if let Some(lang) = &self.lang {
+                form_alt = form_alt.text("language", lang.clone());
+            }
+
+            let mut req_alt = self.client.post(&alt_endpoint).multipart(form_alt);
+            if let Some(key) = &self.api_key {
+                req_alt = req_alt.header("Authorization", format!("Bearer {key}"));
+            }
+            if let Ok(alt_res) = req_alt.send().await {
+                if alt_res.status().is_success() {
+                    res = alt_res;
+                }
+            }
+        }
 
         if !res.status().is_success() {
             let err_text = res.text().await.unwrap_or_default();

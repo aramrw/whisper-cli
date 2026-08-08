@@ -1,6 +1,6 @@
 # whisper-cli
 
-A high-performance command line tool in Rust for transcribing audio files using modern, ultra-fast Speech-to-Text APIs (Groq, OpenAI, Deepgram) and self-hosted local OpenAI-compatible endpoints.
+A high-performance command line tool in Rust for transcribing audio and video files using modern Speech-to-Text APIs (Groq, OpenAI, Deepgram) and self-hosted local OpenAI-compatible endpoints (`whisper-server`, Faster-Whisper, Ollama, LocalAI, vLLM).
 
 Generates transcriptions in `.txt`, `.vtt`, and `.srt` formats automatically.
 
@@ -8,12 +8,13 @@ Generates transcriptions in `.txt`, `.vtt`, and `.srt` formats automatically.
 
 ## Features
 
-- ⚡ **Ultra-Fast Transcription**: Uses Groq (`whisper-large-v3-turbo`), OpenAI (`whisper-1`), Deepgram (`nova-3`), or custom endpoints.
-- 🚀 **Zero Local C++/CMake Build Hassle**: No native C++ building or multi-gigabyte model downloads required.
-- 🌐 **Multi-Provider Support**: Switch easily between Groq, OpenAI, Deepgram, or local/self-hosted servers (Faster-Whisper, Ollama, LocalAI, vLLM).
-- 📝 **Multiple Output Formats**: Saves `.txt`, `.vtt`, and `.srt` subtitle files in the same directory as the input audio.
+- ⚡ **Ultra-Fast Cloud & Local Transcription**: Uses Groq (`whisper-large-v3-turbo`), OpenAI (`whisper-1`), Deepgram (`nova-3`), or local GPU-accelerated endpoints.
+- 🎬 **Universal Audio & Video Support**: Automatic `ffmpeg` pre-decoding for `.mp3`, `.mp4`, `.m4a`, `.wav`, `.mkv`, `.mov`, `.flac`, `.ogg`, and `.webm`.
+- 🌐 **Multi-Provider Architecture**: Switch easily between Groq, OpenAI, Deepgram, or local/self-hosted servers.
+- 📝 **Multiple Output Formats**: Automatically writes `.txt`, `.vtt`, and `.srt` subtitle files in the same directory as the input file.
+- 📺 **Terminal Output Mode**: Use `-s` / `--stdout` to output transcript text directly to standard output without saving files.
 - ⏱️ **Word-level Timestamps**: Generate karaoke-style word timestamps with `--karaoke`.
-- 🌍 **Translation**: Translate non-English audio directly to English with `-t / --translate`.
+- 🌍 **Language Selection & Translation**: Explicit language specification (`-l es`, `-l en`, `-l ja`) and direct translation to English (`-t / --translate`).
 
 ---
 
@@ -26,14 +27,41 @@ git clone https://github.com/aramrw/whisper-cli && cd whisper-cli
 cargo build --release
 ```
 
-Install binary system-wide (optional):
+Install binary system-wide:
 ```bash
-cp target/release/whisper /usr/local/bin/whisper
+cargo install --path .
 ```
 
 ---
 
-## API Key Setup
+## Setting Up a Local Server (`whisper-cpp` on macOS)
+
+To run transcriptions 100% locally with Apple Silicon Metal GPU acceleration without sending data to cloud APIs:
+
+### 1. Install `whisper-cpp`
+```bash
+brew install whisper-cpp
+```
+
+### 2. Download a model file
+```bash
+mkdir -p ~/.cache/whisper-models
+curl -L -o ~/.cache/whisper-models/ggml-large-v3-turbo.bin "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin"
+```
+
+### 3. Start the local server
+```bash
+whisper-server -m ~/.cache/whisper-models/ggml-large-v3-turbo.bin --port 8080
+```
+
+### 4. Transcribe with `whisper-cli`
+```bash
+whisper -p custom -u http://localhost:8080 audio.mp3
+```
+
+---
+
+## API Key Setup (Cloud Providers)
 
 Set the environment variable for your preferred provider:
 
@@ -58,35 +86,34 @@ Alternatively, pass `-k / --api-key` directly on the command line.
 
 ### 1. Transcribe with Groq (Default)
 ```bash
-whisper audio.mp3
+whisper video.mp4
 ```
 
-### 2. Transcribe with OpenAI or Deepgram
+### 2. Specify Language (e.g. Spanish, Japanese, English)
 ```bash
-whisper --provider openai --model whisper-1 audio.mp3
-whisper --provider deepgram --model nova-3 audio.mp3
+whisper -l es spanish_audio.mp3
+whisper -l ja anime_clip.mp4
+whisper -l en podcast.m4a
 ```
 
-### 3. Translate Audio to English
+### 3. Generate `.srt`, `.vtt`, and `.txt` Files locally via `whisper-server`
 ```bash
-whisper --translate audio.mp3
+whisper -p custom -u http://localhost:8080 -l es ~/Downloads/video.mp4
 ```
 
-### 4. Generate Word-Level Subtitles (Karaoke mode)
+### 4. Print Directly to Terminal Stdout (No Files Created)
 ```bash
-whisper --karaoke audio.mp3
+whisper -s -p custom -u http://localhost:8080 audio.mp3
 ```
 
-### 5. Print Directly to Terminal (No Files Created)
+### 5. Generate Word-Level Subtitles (Karaoke mode)
 ```bash
-whisper --stdout audio.mp3
-# or short form:
-whisper -s audio.mp3
+whisper --karaoke video.mp4
 ```
 
-### 6. Use a Local / Self-Hosted Endpoint (Ollama / Faster-Whisper / LocalAI)
+### 6. Translate Audio to English
 ```bash
-whisper --provider custom --api-url http://localhost:8000/v1 audio.wav
+whisper --translate video.mp4
 ```
 
 ---
@@ -109,6 +136,8 @@ Options:
   -u, --api-url <API_URL>    Custom API Base URL for local/self-hosted OpenAI-compatible speech-to-text endpoints
   -t, --translate            Toggle translation to English
       --karaoke              Generate timestamps for each word
+  -s, --stdout               Print transcript directly to terminal stdout
+      --no-files             Skip writing .txt, .vtt, and .srt files to disk
   -h, --help                 Print help
   -V, --version              Print version
 ```

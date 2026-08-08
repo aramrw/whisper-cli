@@ -140,9 +140,10 @@ async fn main() -> Result<()> {
         return Err(anyhow!("The provided audio file '{}' does not exist.", args.audio));
     }
 
+    let prepared_audio = whisper_cli::ffmpeg_decoder::prepare_audio(audio)?;
     let transcriber = create_transcriber(&args)?;
     let transcript = transcriber
-        .transcribe(audio, args.translate, args.karaoke)
+        .transcribe(prepared_audio.path(), args.translate, args.karaoke)
         .await?;
 
     if args.stdout {
