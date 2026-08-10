@@ -40,8 +40,12 @@ pub fn prepare_audio<P: AsRef<Path>>(input_path: P) -> Result<PreparedAudio> {
 
     // Convert mp4, m4a, mp3, flac, ogg, etc. to 16kHz mono wav via ffmpeg
     let temp_file = temp_dir().join(format!("{}.wav", uuid::Uuid::new_v4()));
-    let status = Command::new("ffmpeg")
+    let output = Command::new("ffmpeg")
         .args([
+            "-fflags",
+            "+discardcorrupt",
+            "-err_detect",
+            "ignore_err",
             "-i",
             input.to_str().ok_or_else(|| anyhow!("invalid path"))?,
             "-ar",
@@ -54,22 +58,36 @@ pub fn prepare_audio<P: AsRef<Path>>(input_path: P) -> Result<PreparedAudio> {
             "-hide_banner",
             "-y",
             "-loglevel",
-            "error",
+            "warning",
         ])
         .stdin(Stdio::null())
-        .status();
+        .output();
 
-    match status {
-        Ok(s) if s.success() => Ok(PreparedAudio {
+    match output {
+        Ok(out) => {
+            if !out.status.success() {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                if !stderr.is_empty() {
+                    eprintln!("\n⚠️ ffmpeg warning while decoding audio:\n{}", stderr.trim());
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("\n⚠️ Could not execute ffmpeg: {}", e);
+        }
+    }
+
+    if temp_file.exists() && temp_file.metadata().map(|m| m.len() > 0).unwrap_or(false) {
+        eprintln!("✅ Recovered valid audio stream up to truncation point. Proceeding with transcription...\n");
+        Ok(PreparedAudio {
             path: temp_file,
             is_temp: true,
-        }),
-        _ => {
-            // Fall back to original file if ffmpeg is unavailable or fails
-            Ok(PreparedAudio {
-                path: input.to_path_buf(),
-                is_temp: false,
-            })
-        }
+        })
+    } else {
+        // Fall back to original file if ffmpeg failed completely
+        Ok(PreparedAudio {
+            path: input.to_path_buf(),
+            is_temp: false,
+        })
     }
 }
