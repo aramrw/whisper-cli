@@ -44,15 +44,29 @@ brew install whisper-cpp
 ```
 
 ### 2. Download a model file
+* **Medium** (Recommended for speed & high accuracy):
+  ```bash
+  mkdir -p ~/.cache/whisper-models
+  curl -L -o ~/.cache/whisper-models/ggml-medium.bin "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin"
+  ```
+* **Large v3 Turbo**:
+  ```bash
+  curl -L -o ~/.cache/whisper-models/ggml-large-v3-turbo.bin "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin"
+  ```
+
+### 3. Start the local server (Anti-Glitch & Fast Flags)
+Launch `whisper-server` with Metal GPU Flash Attention (`-fa`), CPU threads (`-t 8`), no-speech threshold (`-nth 0.6`), zero context memory (`-mc 0`), and non-speech token suppression (`-sns`):
+
 ```bash
-mkdir -p ~/.cache/whisper-models
-curl -L -o ~/.cache/whisper-models/ggml-large-v3-turbo.bin "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin"
+whisper-server -m ~/.cache/whisper-models/ggml-large-v3-turbo.bin --port 8080 -t 8 -fa -nth 0.6 -mc 0 -sns
 ```
 
-### 3. Start the local server
-```bash
-whisper-server -m ~/.cache/whisper-models/ggml-large-v3-turbo.bin --port 8080
-```
+> **Server Configuration Notes (Preventing Repetition & Glitches):**
+> - `-fa`: Enables Flash Attention on Apple Metal GPU.
+> - `-t 8`: Utilizes 8 CPU performance threads for pre/post-processing.
+> - `-nth 0.6`: Sets `no_speech_threshold` to `0.6` to filter out background noise/silence hallucinations.
+> - `-mc 0`: Sets `max-context` to `0` to prevent repeating text loop glitches across 30-second window boundaries.
+> - `-sns`: Enables `suppress-nst` to prevent non-speech token hallucinations (like `[Music]`, `[Laughter]`, `(cheering)`).
 
 ### 4. Transcribe with `whisper-cli`
 ```bash
