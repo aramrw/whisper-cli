@@ -8,6 +8,7 @@ Generates transcriptions in `.txt`, `.vtt`, and `.srt` formats automatically.
 
 ## Features
 
+- 🎧 **Native macOS Live Subtitles (`--live`)**: Tap directly into macOS system audio via Apple's `ScreenCaptureKit` (no BlackHole or virtual audio drivers required) for real-time terminal subtitles from Crunchyroll, YouTube, Netflix, or any app.
 - ⚡ **Ultra-Fast Cloud & Local Transcription**: Uses Groq (`whisper-large-v3-turbo`), OpenAI (`whisper-1`), Deepgram (`nova-3`), or local GPU-accelerated endpoints.
 - 🎬 **Universal Audio & Video Support**: Automatic `ffmpeg` pre-decoding for `.mp3`, `.mp4`, `.m4a`, `.wav`, `.mkv`, `.mov`, `.flac`, `.ogg`, and `.webm`.
 - 🌐 **Multi-Provider Architecture**: Switch easily between Groq, OpenAI, Deepgram, or local/self-hosted servers.
@@ -75,6 +76,39 @@ whisper -p custom -u http://localhost:8080 audio.mp3
 
 ---
 
+## Live Real-Time macOS System Audio Subtitles (`--live`)
+
+Stream live subtitles directly from any app playing audio on your Mac (Crunchyroll, YouTube, podcasts, video calls) using native macOS `ScreenCaptureKit`—**no BlackHole or virtual audio routing required**.
+
+> **First-Time Permission**: On first run, macOS will ask to allow your terminal app under **System Settings → Privacy & Security → Screen & System Audio Recording**.
+
+### Live Spanish Subtitles via Local `whisper-server`
+```bash
+whisper --live -p custom -l es
+```
+
+### Live Japanese Subtitles (e.g. Crunchyroll / Anime) via Local `whisper-server`
+```bash
+whisper --live -p custom -l ja
+```
+
+### Live Subtitles Translated to English in Real Time
+```bash
+whisper --live -p custom -l ja --translate
+```
+
+### Live Subtitles with Groq Cloud (Ultra-Low Latency)
+```bash
+whisper --live -p groq -l es
+```
+
+### Save Live Session to `.srt`, `.vtt`, and `.txt` on Exit (`Ctrl+C`)
+```bash
+whisper --live -p custom -l ja episode_01
+```
+
+---
+
 ## API Key Setup (Cloud Providers)
 
 Set the environment variable for your preferred provider:
@@ -135,25 +169,27 @@ whisper --translate video.mp4
 ## CLI Options (`whisper --help`)
 
 ```text
-Generate a transcript of an audio file using Groq, OpenAI, Deepgram, or a custom OpenAI-compatible API endpoint. The transcript will be saved as a .txt, .vtt, and .srt file in the same directory as the audio file.
+Generate a transcript of an audio file or stream real-time subtitles from macOS system audio using Groq, OpenAI, Deepgram, or a custom OpenAI-compatible API endpoint (like whisper-server).
 
-Usage: whisper [OPTIONS] <AUDIO>
+Usage: whisper [OPTIONS] [AUDIO]
 
 Arguments:
-  <AUDIO>  Path to the audio file to transcribe
+  [AUDIO]  Path to the audio file to transcribe (optional when using --live; if provided with --live, saves transcript on exit)
 
 Options:
-  -p, --provider <PROVIDER>  Speech-to-Text provider to use (groq, openai, deepgram, custom) [default: groq]
-  -m, --model <MODEL>        Name of the model to use (e.g. whisper-large-v3-turbo, whisper-1, nova-3)
-  -l, --lang <LANG>          Language spoken in the audio (ISO 639-1 code e.g. 'en', 'es', 'de')
-  -k, --api-key <API_KEY>    API Key (defaults to GROQ_API_KEY, OPENAI_API_KEY, or DEEPGRAM_API_KEY env var)
-  -u, --api-url <API_URL>    Custom API Base URL for local/self-hosted OpenAI-compatible speech-to-text endpoints
-  -t, --translate            Toggle translation to English
-      --karaoke              Generate timestamps for each word
-  -s, --stdout               Print transcript directly to terminal stdout
-      --no-files             Skip writing .txt, .vtt, and .srt files to disk
-  -h, --help                 Print help
-  -V, --version              Print version
+  -p, --provider <PROVIDER>      Speech-to-Text provider to use (groq, openai, deepgram, custom) [default: groq]
+  -m, --model <MODEL>            Name of the model to use (e.g. whisper-large-v3-turbo, whisper-1, nova-3)
+  -l, --lang <LANG>              Language spoken in the audio (ISO 639-1 code e.g. 'en', 'es', 'ja')
+      --live                     Capture macOS system audio in real time and stream subtitles to the terminal
+      --chunk-secs <CHUNK_SECS>  Maximum audio chunk duration in seconds for --live mode [default: 4.0]
+  -k, --api-key <API_KEY>        API Key (defaults to GROQ_API_KEY, OPENAI_API_KEY, or DEEPGRAM_API_KEY env var)
+  -u, --api-url <API_URL>        Custom API Base URL for local/self-hosted OpenAI-compatible speech-to-text endpoints
+  -t, --translate                Toggle translation to English
+      --karaoke                  Generate timestamps for each word
+  -s, --stdout                   Print transcript directly to terminal stdout
+      --no-files                 Skip writing .txt, .vtt, and .srt files to disk
+  -h, --help                     Print help
+  -V, --version                  Print version
 ```
 
 ---

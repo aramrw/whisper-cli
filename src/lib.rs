@@ -1,4 +1,5 @@
 pub mod ffmpeg_decoder;
+pub mod live;
 pub mod provider;
 pub mod transcript;
 pub mod utils;
