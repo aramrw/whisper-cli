@@ -40,6 +40,8 @@ fn main() {
         println!("cargo:rustc-link-search=native={}", out_dir.display());
         println!("cargo:rustc-link-lib=static=macos_audio");
         println!("cargo:rustc-link-lib=framework=ScreenCaptureKit");
+        println!("cargo:rustc-link-lib=framework=SoundAnalysis");
+        println!("cargo:rustc-link-lib=framework=AVFoundation");
         println!("cargo:rustc-link-lib=framework=CoreMedia");
         println!("cargo:rustc-link-lib=framework=CoreAudio");
         println!("cargo:rustc-link-lib=framework=CoreGraphics");

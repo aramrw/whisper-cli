@@ -40,6 +40,7 @@ extern "C" {
     fn whisper_macos_audio_bytes_received() -> u64;
     fn whisper_macos_audio_last_status() -> i32;
     fn whisper_macos_audio_sample_rate() -> u32;
+    fn whisper_macos_speech_permille() -> u32;
 }
 
 #[cfg(target_os = "macos")]
@@ -124,6 +125,120 @@ impl Drop for MacOsAudioStream {
             }
             self.sender_ptr = std::ptr::null_mut();
         }
+    }
+}
+
+/// Hybrid acoustic vocal-band (300Hz–3400Hz) + Apple Neural Engine (`SoundAnalysis`) speech detector.
+/// Distinguishes human speech from loud anime SFX (explosions, sword clashes) and background music.
+struct SpeechDetector {
+    hp_prev_in: f32,
+    hp_prev_out: f32,
+    lp_prev_out: f32,
+    noise_floor_rms: f32,
+    smoothed_speech_prob: f32,
+}
+
+impl SpeechDetector {
+    fn new() -> Self {
+        Self {
+            hp_prev_in: 0.0,
+            hp_prev_out: 0.0,
+            lp_prev_out: 0.0,
+            noise_floor_rms: 0.003,
+            smoothed_speech_prob: 0.0,
+        }
+    }
+
+    /// Analyzes a frame of 16kHz mono audio and combines fast 20ms vocal-band acoustics
+    /// with macOS `SoundAnalysis` neural speech confidence (`ane_speech_conf` in `0.0..=1.0`).
+    /// Returns `(is_speech, speech_probability, vocal_band_rms)`.
+    fn analyze(&mut self, samples: &[f32], ane_speech_conf: f32) -> (bool, f32, f32) {
+        if samples.is_empty() {
+            return (false, 0.0, 0.0);
+        }
+
+        // 1st-order High-Pass (~280 Hz at 16kHz) + 1st-order Low-Pass (~3400 Hz at 16kHz)
+        // Isolates the human vowel/formant frequency band while rejecting sub-bass rumbles & high-freq SFX
+        let hp_alpha: f32 = 0.90;
+        let lp_alpha: f32 = 0.57;
+
+        let mut total_sq: f32 = 0.0;
+        let mut vocal_sq: f32 = 0.0;
+        let mut zero_crossings: usize = 0;
+        let mut prev_vocal: f32 = self.lp_prev_out;
+
+        for &x in samples {
+            total_sq += x * x;
+
+            let hp = hp_alpha * (self.hp_prev_out + x - self.hp_prev_in);
+            self.hp_prev_in = x;
+            self.hp_prev_out = hp;
+
+            let vocal = self.lp_prev_out + lp_alpha * (hp - self.lp_prev_out);
+            self.lp_prev_out = vocal;
+
+            vocal_sq += vocal * vocal;
+            if (vocal >= 0.0 && prev_vocal < 0.0) || (vocal < 0.0 && prev_vocal >= 0.0) {
+                zero_crossings += 1;
+            }
+            prev_vocal = vocal;
+        }
+
+        let n = samples.len() as f32;
+        let total_rms = (total_sq / n).sqrt();
+        let vocal_rms = (vocal_sq / n).sqrt();
+        let zcr = zero_crossings as f32 / n;
+
+        // Instant silence check: if vocal-band energy is very low, no one is speaking right now
+        // (even if the 0.6s neural window from a previous word hasn't finished decaying yet).
+        if vocal_rms < 0.004 && total_rms < 0.005 {
+            self.noise_floor_rms = (self.noise_floor_rms * 0.95 + vocal_rms * 0.05).max(0.002);
+            self.smoothed_speech_prob *= 0.60;
+            return (false, self.smoothed_speech_prob, vocal_rms);
+        }
+
+        // Ratio of energy in the 300-3400Hz vocal band vs broadband energy
+        let band_ratio = (vocal_rms / (total_rms + 1e-6)).clamp(0.0, 1.2);
+
+        // Human speech ZCR in the vocal band typically sits between 0.02 (160Hz) and 0.24 (1900Hz)
+        let zcr_voiced = if (0.015..=0.25).contains(&zcr) {
+            1.0_f32
+        } else {
+            0.35_f32
+        };
+
+        // Update background music / ambient noise floor slowly when ANE says non-speech
+        if ane_speech_conf < 0.20 {
+            self.noise_floor_rms =
+                (self.noise_floor_rms * 0.96 + vocal_rms * 0.04).clamp(0.002, 0.08);
+        } else if vocal_rms < self.noise_floor_rms {
+            self.noise_floor_rms =
+                (self.noise_floor_rms * 0.85 + vocal_rms * 0.15).clamp(0.002, 0.08);
+        }
+
+        // How far above the continuous background music floor is the current vocal-band energy?
+        let snr_above_floor = (vocal_rms / (self.noise_floor_rms * 1.45 + 0.002)).clamp(0.0, 2.5);
+        let acoustic_score =
+            ((band_ratio * 0.85) * zcr_voiced * (snr_above_floor * 0.65)).clamp(0.0, 1.0);
+
+        // Combine Apple Neural Engine SoundAnalysis confidence with 20ms vocal-band score:
+        // - If ANE is confident it's speech (> 0.30) AND vocal_rms is active -> high probability
+        // - If ANE says it's pure SFX/music (< 0.12) even though it's loud -> suppress score
+        let raw_prob = if ane_speech_conf >= 0.25 {
+            (ane_speech_conf * 0.70 + acoustic_score * 0.30).clamp(0.0, 1.0)
+        } else if ane_speech_conf > 0.01 {
+            // ANE is active and sees mostly non-speech (music/SFX), require strong vocal-band modulation
+            (ane_speech_conf * 0.55 + acoustic_score * 0.35).clamp(0.0, 1.0)
+        } else {
+            // Fallback during initial 300ms before first ANE window fires
+            acoustic_score
+        };
+
+        self.smoothed_speech_prob = self.smoothed_speech_prob * 0.45 + raw_prob * 0.55;
+        let is_speech =
+            vocal_rms >= 0.0045 && (self.smoothed_speech_prob >= 0.36 || ane_speech_conf >= 0.42);
+
+        (is_speech, self.smoothed_speech_prob, vocal_rms)
     }
 }
 
@@ -334,6 +449,7 @@ fn render_live_hud(
     tick: usize,
     rms: f32,
     peak: f32,
+    speech_prob: f32,
     spark_history: &VecDeque<f32>,
     is_speaking: bool,
     speech_secs: f32,
@@ -341,6 +457,7 @@ fn render_live_hud(
     in_flight: bool,
     audio_bytes: u64,
     audio_pkts: u64,
+    speech_mode: bool,
 ) -> String {
     let spinner = SPINNER_FRAMES[tick % SPINNER_FRAMES.len()];
     let normalized = (rms / 0.12).clamp(0.0, 1.0).sqrt();
@@ -350,19 +467,26 @@ fn render_live_hud(
     let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
     let spark = render_sparkline(spark_history);
     let bytes_str = format_bytes(audio_bytes);
+    let speech_pct = (speech_prob * 100.0).round() as u32;
 
     let state = if in_flight {
         "\x1b[33m⏳ Sending\x1b[0m".to_string()
     } else if is_speaking {
-        format!("\x1b[32m🗣️ {speech_secs:.1}s/{max_secs:.0}s\x1b[0m")
+        if speech_mode {
+            format!("\x1b[32m🗣️ {speech_secs:.1}s (Voice {speech_pct}%)\x1b[0m")
+        } else {
+            format!("\x1b[32m🗣️ {speech_secs:.1}s/{max_secs:.0}s\x1b[0m")
+        }
     } else if audio_bytes == 0 {
         "\x1b[2m⚪ Waiting for macOS audio...\x1b[0m".to_string()
+    } else if speech_mode && rms >= 0.008 && speech_pct < 25 {
+        format!("\x1b[35m🎵 SFX/Music ({speech_pct}%)\x1b[0m")
     } else {
-        "\x1b[36m🎙️ Listening\x1b[0m".to_string()
+        format!("\x1b[36m🎙️ Listening ({speech_pct}%)\x1b[0m")
     };
 
     format!(
-        "{spinner} [{bar}] \x1b[36m{spark}\x1b[0m │ 📥 {bytes_str} ({audio_pkts} pkts) │ Peak: {peak:.3} │ {state}"
+        "{spinner} [{bar}] \x1b[36m{spark}\x1b[0m │ 📥 {bytes_str} ({audio_pkts} pkts) │ Peak: {peak:.2} │ {state}"
     )
 }
 
@@ -373,6 +497,7 @@ pub struct LiveConfig {
     pub karaoke: bool,
     pub stdout_only: bool,
     pub chunk_secs: f32,
+    pub speech_mode: bool,
 }
 
 struct AudioSegment {
@@ -396,11 +521,14 @@ pub async fn run_audio_test() -> Result<()> {
     eprintln!("╭──────────────────────────────────────────────────────────────╮");
     eprintln!("│ 🎛️  macOS Native System Audio Diagnostic Monitor             │");
     eprintln!("╰──────────────────────────────────────────────────────────────╯");
-    eprintln!("  Play any video/music (Crunchyroll, YouTube, Spotify) to see live bytes & waveform.");
+    eprintln!("  Play any video/music (Crunchyroll, YouTube, Spotify) to see live bytes, waveform & voice %.");
     eprintln!("  Press Ctrl+C to stop.\n");
 
     let mut spark_history: VecDeque<f32> = VecDeque::from(vec![0.0; 16]);
+    let mut detector = SpeechDetector::new();
     let mut current_rms: f32 = 0.0;
+    let mut current_speech_prob: f32 = 0.0;
+    let mut is_voice: bool = false;
     let mut max_session_peak: f32 = 0.0;
     let mut tick: usize = 0;
     let mut interval = tokio::time::interval(Duration::from_millis(80));
@@ -427,6 +555,11 @@ pub async fn run_audio_test() -> Result<()> {
                     if pkt_peak > max_session_peak {
                         max_session_peak = pkt_peak;
                     }
+                    let ane_conf = unsafe { whisper_macos_speech_permille() } as f32 / 1000.0;
+                    let (voice, prob, _) = detector.analyze(&samples, ane_conf);
+                    is_voice = voice;
+                    current_speech_prob = prob;
+
                     spark_history.push_back(current_rms);
                     if spark_history.len() > 16 {
                         spark_history.pop_front();
@@ -438,25 +571,26 @@ pub async fn run_audio_test() -> Result<()> {
                 let bytes = unsafe { whisper_macos_audio_bytes_received() };
                 let pkts = unsafe { whisper_macos_audio_packets_received() };
                 let sr = unsafe { whisper_macos_audio_sample_rate() };
-                let is_speaking = current_rms >= 0.0045;
 
                 let hud = render_live_hud(
                     tick,
                     current_rms,
                     max_session_peak,
+                    current_speech_prob,
                     &spark_history,
-                    is_speaking,
+                    is_voice,
                     0.0,
                     4.0,
                     false,
                     bytes,
                     pkts,
+                    true,
                 );
                 eprint!("\r\x1b[2K{hud} ({sr}Hz)");
                 let _ = std::io::stderr().flush();
 
-                // Gently decay visual meter when idle between packets
                 current_rms *= 0.80;
+                current_speech_prob *= 0.85;
                 spark_history.push_back(current_rms);
                 if spark_history.len() > 16 {
                     spark_history.pop_front();
@@ -486,6 +620,13 @@ pub async fn run_live_subtitles(
     let (_stream, mut audio_rx) = MacOsAudioStream::start()?;
     let session_start = Instant::now();
 
+    // In --speech mode, allow long sentences up to 15.0s unless the user set an even larger --chunk-secs
+    let effective_max_secs = if config.speech_mode {
+        config.chunk_secs.max(15.0)
+    } else {
+        config.chunk_secs.clamp(1.5, 15.0)
+    };
+
     if !config.stdout_only {
         let lang_str = config.lang.as_deref().unwrap_or("auto-detect");
         let mode_str = if config.translate {
@@ -493,31 +634,41 @@ pub async fn run_live_subtitles(
         } else {
             lang_str.to_string()
         };
+        let window_desc = if config.speech_mode {
+            format!("Smart Speech VAD (waits for sentence end up to {effective_max_secs:.0}s, filters SFX/music)")
+        } else {
+            format!("{:.1}s adaptive VAD chunks", effective_max_secs)
+        };
         eprintln!("╭──────────────────────────────────────────────────────────────╮");
         eprintln!("│ 🎧 macOS Live System Audio Subtitles (ScreenCaptureKit)      │");
         eprintln!("╰──────────────────────────────────────────────────────────────╯");
         eprintln!("  • Provider : {}", config.provider_label);
         eprintln!("  • Language : {mode_str}");
-        eprintln!(
-            "  • Window   : {:.1}s adaptive VAD chunks (Press Ctrl+C to stop)\n",
-            config.chunk_secs
-        );
+        eprintln!("  • Mode     : {window_desc} (Press Ctrl+C to stop)\n");
     }
 
     let (segment_tx, mut segment_rx) = mpsc::channel::<AudioSegment>(8);
     let is_transcribing = Arc::new(AtomicBool::new(false));
     let is_transcribing_ui = Arc::clone(&is_transcribing);
 
-    let max_chunk_samples = ((config.chunk_secs.clamp(1.5, 15.0)) * SAMPLE_RATE as f32) as usize;
+    let max_chunk_samples = (effective_max_secs * SAMPLE_RATE as f32) as usize;
+    let soft_long_sentence_samples = (7.5 * SAMPLE_RATE as f32) as usize;
     let min_pause_split_samples = (1.10 * SAMPLE_RATE as f32) as usize;
     let short_phrase_min_samples = (0.32 * SAMPLE_RATE as f32) as usize;
-    let pause_silence_samples = (0.36 * SAMPLE_RATE as f32) as usize;
+    let pause_silence_samples = if config.speech_mode {
+        // Wait ~0.46s of non-speech so natural mid-sentence word gaps aren't cut prematurely
+        (0.46 * SAMPLE_RATE as f32) as usize
+    } else {
+        (0.36 * SAMPLE_RATE as f32) as usize
+    };
+    let breath_pause_samples = (0.24 * SAMPLE_RATE as f32) as usize;
     let long_silence_samples = (0.68 * SAMPLE_RATE as f32) as usize;
-    let pre_roll_capacity = (0.30 * SAMPLE_RATE as f32) as usize;
+    let pre_roll_capacity = (0.35 * SAMPLE_RATE as f32) as usize;
     let overlap_samples = (0.18 * SAMPLE_RATE as f32) as usize;
     let vad_threshold: f32 = 0.0045;
 
     let stdout_only = config.stdout_only;
+    let speech_mode = config.speech_mode;
 
     // Background worker that transcribes queued speech segments sequentially in order
     let translate = config.translate;
@@ -575,11 +726,13 @@ pub async fn run_live_subtitles(
     let mut pre_roll: VecDeque<f32> = VecDeque::with_capacity(pre_roll_capacity + 2048);
     let mut speech_buffer: Vec<f32> = Vec::with_capacity(max_chunk_samples + 4096);
     let mut spark_history: VecDeque<f32> = VecDeque::from(vec![0.0; 16]);
+    let mut speech_detector = SpeechDetector::new();
     let mut speaking = false;
     let mut silence_samples: usize = 0;
     let mut active_speech_samples: usize = 0;
     let mut segment_start_ms: i64 = 0;
     let mut current_rms: f32 = 0.0;
+    let mut current_speech_prob: f32 = 0.0;
     let mut recent_peak: f32 = 0.0;
     let mut tick: usize = 0;
     let mut ui_interval = tokio::time::interval(Duration::from_millis(80));
@@ -605,13 +758,15 @@ pub async fn run_live_subtitles(
                         tick,
                         current_rms,
                         recent_peak,
+                        current_speech_prob,
                         &spark_history,
                         speaking,
                         speech_secs,
-                        config.chunk_secs,
+                        effective_max_secs,
                         in_flight,
                         bytes,
                         pkts,
+                        speech_mode,
                     );
                     eprint!("\r\x1b[2K{hud}");
                     let _ = std::io::stderr().flush();
@@ -627,14 +782,25 @@ pub async fn run_live_subtitles(
 
                 let rms = compute_rms(&samples);
                 let pkt_peak = compute_peak(&samples);
+                let ane_conf = unsafe { whisper_macos_speech_permille() } as f32 / 1000.0;
+                let (detected_voice, speech_prob, _vocal_rms) =
+                    speech_detector.analyze(&samples, ane_conf);
+
                 current_rms = rms;
+                current_speech_prob = speech_prob;
                 recent_peak = (recent_peak * 0.95).max(pkt_peak);
                 spark_history.push_back(rms);
                 if spark_history.len() > 16 {
                     spark_history.pop_front();
                 }
 
-                let frame_has_speech = rms >= vad_threshold || pkt_peak >= 0.025;
+                let frame_has_speech = if speech_mode {
+                    // In --speech mode, require vocal-band + neural speech detection (ignores pure SFX/music)
+                    detected_voice
+                } else {
+                    rms >= vad_threshold || pkt_peak >= 0.025
+                };
+
                 let now_ms = session_start.elapsed().as_millis() as i64;
 
                 if !speaking {
@@ -668,18 +834,22 @@ pub async fn run_live_subtitles(
 
                 let natural_pause_ready = speech_buffer.len() >= min_pause_split_samples
                     && silence_samples >= pause_silence_samples;
+                // In --speech mode, if a sentence is already > 7.5s long, split on any 0.24s breath pause
+                let long_sentence_breath_ready = speech_mode
+                    && speech_buffer.len() >= soft_long_sentence_samples
+                    && silence_samples >= breath_pause_samples;
                 let short_phrase_ready = active_speech_samples >= short_phrase_min_samples
                     && silence_samples >= long_silence_samples;
                 let dropped_noise = active_speech_samples < short_phrase_min_samples
                     && silence_samples >= long_silence_samples;
 
                 if dropped_noise {
-                    // Brief click/noise burst that wasn't real speech; reset
+                    // Brief click/SFX burst that wasn't sustained speech; reset
                     speech_buffer.clear();
                     speaking = false;
                     silence_samples = 0;
                     active_speech_samples = 0;
-                } else if natural_pause_ready || short_phrase_ready {
+                } else if natural_pause_ready || long_sentence_breath_ready || short_phrase_ready {
                     let chunk = std::mem::take(&mut speech_buffer);
                     speaking = false;
                     silence_samples = 0;
@@ -691,8 +861,8 @@ pub async fn run_live_subtitles(
                         end_offset_ms: now_ms,
                     });
                 } else if speech_buffer.len() >= max_chunk_samples {
-                    // Continuous fast speech reached max window: split at quietest micro-pause in last 0.45s
-                    let search_win = (0.45 * SAMPLE_RATE as f32) as usize;
+                    // Reached safety max window: split at quietest micro-pause in last 0.65s
+                    let search_win = (0.65 * SAMPLE_RATE as f32) as usize;
                     let split_at = find_best_split_index(&speech_buffer, search_win);
 
                     let chunk = speech_buffer[..split_at].to_vec();
@@ -746,12 +916,30 @@ mod tests {
         assert!(is_hallucination("[Music]"));
         assert!(is_hallucination("(Laughter)"));
         assert!(is_hallucination("Thank you for watching!"));
+        assert!(is_hallucination("¡Suscríbete al canal!"));
         assert!(is_hallucination("ご視聴ありがとうございました。"));
         assert!(is_hallucination(
             "Subtítulos realizados por la comunidad de Amara.org"
         ));
         assert!(!is_hallucination("Hola, ¿cómo estás?"));
         assert!(!is_hallucination("これはテストです。"));
+    }
+
+    #[test]
+    fn test_speech_detector_voice_vs_sfx() {
+        let mut detector = SpeechDetector::new();
+        // Silence -> not speech
+        let silence = vec![0.0_f32; 800];
+        let (is_speech, _, _) = detector.analyze(&silence, 0.0);
+        assert!(!is_speech);
+
+        // Simulated 400Hz vowel harmonic with high ANE speech confidence -> speech
+        let voice: Vec<f32> = (0..800)
+            .map(|i| (i as f32 * 2.0 * std::f32::consts::PI * 400.0 / 16000.0).sin() * 0.15)
+            .collect();
+        let _ = detector.analyze(&voice, 0.85);
+        let (is_speech_voice, prob_voice, _) = detector.analyze(&voice, 0.85);
+        assert!(is_speech_voice, "expected speech, got prob={prob_voice}");
     }
 
     #[test]

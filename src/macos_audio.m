@@ -1,5 +1,7 @@
 #import <Foundation/Foundation.h>
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
+#import <SoundAnalysis/SoundAnalysis.h>
+#import <AVFoundation/AVFoundation.h>
 #import <CoreMedia/CoreMedia.h>
 #import <CoreAudio/CoreAudioTypes.h>
 #import <CoreGraphics/CoreGraphics.h>
@@ -17,6 +19,7 @@ static atomic_int_fast32_t g_last_status = 0;
 static atomic_uint_fast32_t g_sample_rate = 0;
 static atomic_uint_fast32_t g_channels = 0;
 static atomic_uint_fast32_t g_bits_per_channel = 0;
+static atomic_uint_fast32_t g_speech_permille = 0;
 
 uint64_t whisper_macos_audio_packets_received(void) {
     return atomic_load(&g_audio_packets);
@@ -38,15 +41,62 @@ uint32_t whisper_macos_audio_sample_rate(void) {
     return atomic_load(&g_sample_rate);
 }
 
-@interface WhisperSCStreamHandler : NSObject <SCStreamOutput, SCStreamDelegate>
+uint32_t whisper_macos_speech_permille(void) {
+    return atomic_load(&g_speech_permille);
+}
+
+@interface WhisperSCStreamHandler : NSObject <SCStreamOutput, SCStreamDelegate, SNResultsObserving>
 @property (nonatomic, assign) WhisperAudioCallback callback;
 @property (nonatomic, assign) void *userData;
 @property (nonatomic, strong) SCStream *stream;
 @property (nonatomic, strong) dispatch_queue_t audioQueue;
 @property (nonatomic, strong) dispatch_queue_t videoQueue;
+@property (nonatomic, strong) AVAudioFormat *pcmFormat;
+@property (nonatomic, strong) SNAudioStreamAnalyzer *soundAnalyzer;
+@property (nonatomic, assign) AVAudioFramePosition audioFramePos;
 @end
 
 @implementation WhisperSCStreamHandler
+
+- (void)request:(id<SNRequest>)request didProduceResult:(id<SNResult>)result {
+    if ([result isKindOfClass:[SNClassificationResult class]]) {
+        SNClassificationResult *classResult = (SNClassificationResult *)result;
+        double speechConf = 0.0;
+        NSArray<NSString *> *speechLabels = @[
+            @"speech",
+            @"conversation",
+            @"narration",
+            @"monologue",
+            @"whispering",
+            @"shout",
+            @"screaming"
+        ];
+        for (NSString *label in speechLabels) {
+            SNClassification *c = [classResult classificationForIdentifier:label];
+            if (c && c.confidence > speechConf) {
+                speechConf = c.confidence;
+            }
+        }
+        uint32_t permille = (uint32_t)lrint(fmin(fmax(speechConf, 0.0), 1.0) * 1000.0);
+        atomic_store(&g_speech_permille, permille);
+    }
+}
+
+- (void)feedSoundAnalyzer:(const float *)samples count:(size_t)count {
+    if (!self.soundAnalyzer || !self.pcmFormat || !samples || count == 0) {
+        return;
+    }
+    AVAudioFrameCount frameCount = (AVAudioFrameCount)count;
+    AVAudioPCMBuffer *pcmBuf = [[AVAudioPCMBuffer alloc] initWithPCMFormat:self.pcmFormat
+                                                             frameCapacity:frameCount];
+    if (!pcmBuf || !pcmBuf.floatChannelData || !pcmBuf.floatChannelData[0]) {
+        return;
+    }
+    memcpy(pcmBuf.floatChannelData[0], samples, count * sizeof(float));
+    pcmBuf.frameLength = frameCount;
+    [self.soundAnalyzer analyzeAudioBuffer:pcmBuf atAudioFramePosition:self.audioFramePos];
+    self.audioFramePos += (AVAudioFramePosition)frameCount;
+}
 
 - (void)stream:(SCStream *)stream
 didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
@@ -135,6 +185,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
             atomic_fetch_add(&g_audio_bytes, (uint64_t)totalLen);
             size_t floatCount = totalLen / sizeof(float);
             if (floatCount > 0) {
+                [self feedSoundAnalyzer:(const float *)rawBuf count:floatCount];
                 self.callback((const float *)rawBuf, floatCount, self.userData);
             }
         }
@@ -227,11 +278,13 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
                     float frac = (float)(srcIdx - (double)idx0);
                     resampled[i] = mono[idx0] * (1.0f - frac) + mono[idx1] * frac;
                 }
+                [self feedSoundAnalyzer:resampled count:outFrames];
                 self.callback(resampled, outFrames, self.userData);
                 free(resampled);
             }
         }
     } else if (frames > 0) {
+        [self feedSoundAnalyzer:mono count:frames];
         self.callback(mono, frames, self.userData);
     }
 
@@ -261,6 +314,7 @@ void *whisper_macos_audio_start(WhisperAudioCallback callback, void *user_data, 
         atomic_store(&g_video_packets, 0);
         atomic_store(&g_audio_bytes, 0);
         atomic_store(&g_last_status, 0);
+        atomic_store(&g_speech_permille, 0);
 
         // Initialize CoreGraphics WindowServer connection for CLI process
         (void)CGMainDisplayID();
@@ -318,6 +372,28 @@ void *whisper_macos_audio_start(WhisperAudioCallback callback, void *user_data, 
         handler.userData = user_data;
         handler.audioQueue = dispatch_queue_create("com.whispercli.audio", DISPATCH_QUEUE_SERIAL);
         handler.videoQueue = dispatch_queue_create("com.whispercli.video", DISPATCH_QUEUE_SERIAL);
+        handler.audioFramePos = 0;
+
+        // Initialize Apple Neural Engine SoundAnalysis Speech Classifier (16kHz Mono)
+        AVAudioFormat *pcmFormat = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatFloat32
+                                                                    sampleRate:16000.0
+                                                                      channels:1
+                                                                   interleaved:NO];
+        if (pcmFormat) {
+            handler.pcmFormat = pcmFormat;
+            SNAudioStreamAnalyzer *analyzer = [[SNAudioStreamAnalyzer alloc] initWithFormat:pcmFormat];
+            NSError *reqError = nil;
+            SNClassifySoundRequest *classifyReq =
+                [[SNClassifySoundRequest alloc] initWithClassifierIdentifier:SNClassifierIdentifierVersion1
+                                                                       error:&reqError];
+            if (classifyReq && !reqError) {
+                classifyReq.windowDuration = CMTimeMakeWithSeconds(0.6, 16000);
+                classifyReq.overlapFactor = 0.75;
+                if ([analyzer addRequest:classifyReq withObserver:handler error:&reqError]) {
+                    handler.soundAnalyzer = analyzer;
+                }
+            }
+        }
 
         SCStream *stream = [[SCStream alloc] initWithFilter:filter configuration:config delegate:handler];
         handler.stream = stream;
@@ -376,6 +452,10 @@ void whisper_macos_audio_stop(void *handle) {
             dispatch_time_t timeout = dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC));
             dispatch_semaphore_wait(stopSem, timeout);
             handler.stream = nil;
+        }
+        if (handler.soundAnalyzer) {
+            [handler.soundAnalyzer removeAllRequests];
+            handler.soundAnalyzer = nil;
         }
     }
 }
