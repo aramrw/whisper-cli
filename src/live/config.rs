@@ -16,5 +16,6 @@ pub struct LiveConfig {
     pub apple: bool,
     pub moonshine: bool,
     pub parakeet: bool,
+    pub parakeet_ultra: bool,
     // pub lfm: bool,
 }

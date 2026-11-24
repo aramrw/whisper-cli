@@ -7,6 +7,7 @@ pub mod utils;
 
 pub use provider::{
     custom::CustomApiProvider, deepgram::DeepgramProvider, groq::GroqProvider,
-    openai::OpenAiProvider, parakeet::ParakeetProvider, Transcriber,
+    openai::OpenAiProvider, parakeet::ParakeetProvider, parakeet_ultra::ParakeetUltraProvider,
+    Transcriber,
 };
 pub use transcript::{Transcript, Utternace};

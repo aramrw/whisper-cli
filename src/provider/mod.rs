@@ -4,6 +4,7 @@ pub mod groq;
 // pub mod lfm;
 pub mod openai;
 pub mod parakeet;
+pub mod parakeet_ultra;
 
 use anyhow::Result;
 use async_trait::async_trait;

@@ -62,6 +62,30 @@ extern "C" {
         segment_start_sec: f64,
     );
     pub fn wisp_parakeet_stop(handle: *mut c_void);
+    pub fn wisp_parakeet_ultra_available() -> bool;
+    pub fn wisp_parakeet_ultra_start(
+        model_dir: *const c_char,
+        lang: *const c_char,
+        silent: bool,
+        ctx: *mut c_void,
+        callback: extern "C" fn(*mut c_void, *const c_char, bool, f64, f64, f64),
+    ) -> *mut c_void;
+    pub fn wisp_parakeet_ultra_is_busy(handle: *mut c_void) -> bool;
+    pub fn wisp_parakeet_ultra_decode(
+        handle: *mut c_void,
+        samples: *const f32,
+        count: usize,
+        is_final: bool,
+        segment_start_sec: f64,
+    );
+    pub fn wisp_parakeet_ultra_stop(handle: *mut c_void);
+    pub fn wisp_parakeet_ultra_transcribe_file(
+        audio_path: *const c_char,
+        model_dir: *const c_char,
+        lang: *const c_char,
+        silent: bool,
+    ) -> *mut c_char;
+    pub fn wisp_parakeet_ultra_free_string(ptr: *mut c_char);
 }
 
 #[cfg(target_os = "macos")]

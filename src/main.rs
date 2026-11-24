@@ -11,7 +11,8 @@ use whisper_cli::utils::write_to;
 use whisper_cli::{
     live::{run_audio_test, run_live_subtitles, LiveConfig},
     server::{resolve_model_path, run_server_foreground, ManagedServer, ServerConfig, ServerPreset},
-    CustomApiProvider, DeepgramProvider, GroqProvider, OpenAiProvider, ParakeetProvider, Transcriber,
+    CustomApiProvider, DeepgramProvider, GroqProvider, OpenAiProvider, ParakeetProvider,
+    ParakeetUltraProvider, Transcriber,
 };
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -24,6 +25,8 @@ pub enum ProviderKind {
     Deepgram,
     #[clap(name = "parakeet")]
     Parakeet,
+    #[clap(name = "parakeet-ultra")]
+    ParakeetUltra,
     #[clap(name = "custom")]
     Custom,
 }
@@ -33,10 +36,10 @@ pub enum ProviderKind {
     author,
     version,
     about = "Transcribe audio files or live macOS system audio using modern Speech-to-Text APIs.",
-    long_about = "Generate a transcript of an audio file, launch a local whisper-server with tuned presets, or stream real-time subtitles from macOS system audio using NVIDIA Parakeet TDT (--parakeet), Apple Speech (--apple), Moonshine (--moonshine), Groq, OpenAI, Deepgram, or a custom OpenAI-compatible API endpoint."
+    long_about = "Generate a transcript of an audio file, launch a local whisper-server with tuned presets, or stream real-time subtitles from macOS system audio using NVIDIA Parakeet TDT (--parakeet), NVIDIA Parakeet Ultra (--parakeet-ultra), Apple Speech (--apple), Moonshine (--moonshine), Groq, OpenAI, Deepgram, or a custom OpenAI-compatible API endpoint."
 )]
 struct Args {
-    /// Speech-to-Text provider to use (groq, openai, deepgram, parakeet, custom)
+    /// Speech-to-Text provider to use (groq, openai, deepgram, parakeet, parakeet-ultra, custom)
     #[clap(short, long, value_enum, default_value = "groq")]
     provider: ProviderKind,
 
@@ -48,8 +51,8 @@ struct Args {
     #[clap(short = 'l', long)]
     lang: Option<String>,
 
-    /// Path to the audio file to transcribe (optional when using --live, --serve, --test-audio, --apple, --moonshine, or --parakeet)
-    #[clap(required_unless_present_any = ["live", "test_audio", "serve", "apple", "moonshine", "parakeet"])]
+    /// Path to the audio file to transcribe (optional when using --live, --serve, --test-audio, --apple, --moonshine, --parakeet, or --parakeet-ultra)
+    #[clap(required_unless_present_any = ["live", "test_audio", "serve", "apple", "moonshine", "parakeet", "parakeet_ultra"])]
     audio: Option<String>,
 
     /// Capture macOS system audio in real time and stream subtitles to the terminal
@@ -67,6 +70,10 @@ struct Args {
     /// Use NVIDIA Parakeet TDT 0.6B v3 via MacParakeet (Apple Neural Engine CoreML, ultra-fast & accurate)
     #[clap(long, default_value = "false")]
     parakeet: bool,
+
+    /// Use NVIDIA Parakeet Ultra 0.6B (Apple Neural Engine CoreML, post-trained v3 with higher European accuracy)
+    #[clap(long, default_value = "false")]
+    parakeet_ultra: bool,
 
     /// Wait for the speaker to finish their sentence before sending (uses Apple Neural Engine SoundAnalysis + vocal-band detection to ignore SFX/music)
     #[clap(long, default_value = "false")]
@@ -132,6 +139,8 @@ struct Args {
 fn effective_provider(args: &Args) -> ProviderKind {
     if args.parakeet {
         ProviderKind::Parakeet
+    } else if args.parakeet_ultra {
+        ProviderKind::ParakeetUltra
     } else if args.preset.is_some() {
         ProviderKind::Custom
     } else {
@@ -163,6 +172,12 @@ fn provider_label(args: &Args) -> String {
                 args.model.as_deref().unwrap_or("0.6B v3")
             )
         }
+        ProviderKind::ParakeetUltra => {
+            format!(
+                "NVIDIA Parakeet Ultra ({})",
+                args.model.as_deref().unwrap_or("0.6B INT8")
+            )
+        }
         ProviderKind::Custom => {
             let url = effective_api_url(args);
             if let Some(preset) = args.preset {
@@ -180,7 +195,7 @@ fn create_transcriber(args: &Args) -> Result<Box<dyn Transcriber>> {
         ProviderKind::Groq => env::var("GROQ_API_KEY").ok(),
         ProviderKind::OpenAi => env::var("OPENAI_API_KEY").ok(),
         ProviderKind::Deepgram => env::var("DEEPGRAM_API_KEY").ok(),
-        ProviderKind::Parakeet => None,
+        ProviderKind::Parakeet | ProviderKind::ParakeetUltra => None,
         ProviderKind::Custom => env::var("CUSTOM_API_KEY").ok(),
     };
 
@@ -218,6 +233,11 @@ fn create_transcriber(args: &Args) -> Result<Box<dyn Transcriber>> {
             )))
         }
         ProviderKind::Parakeet => Ok(Box::new(ParakeetProvider::new(args.model.clone())?)),
+        ProviderKind::ParakeetUltra => Ok(Box::new(ParakeetUltraProvider::new(
+            args.model.clone(),
+            args.lang.clone(),
+            args.silent,
+        )?)),
         ProviderKind::Custom => {
             let url = effective_api_url(args);
             Ok(Box::new(CustomApiProvider::new(
@@ -283,9 +303,10 @@ async fn handle_live(
     let is_apple = args.apple;
     let is_moonshine = args.moonshine;
     let is_parakeet = args.parakeet || args.provider == ProviderKind::Parakeet;
+    let is_parakeet_ultra = args.parakeet_ultra || args.provider == ProviderKind::ParakeetUltra;
 
     let chunk_secs = args.chunk_secs.unwrap_or_else(|| {
-        if is_parakeet {
+        if is_parakeet || is_parakeet_ultra {
             10.0
         } else {
             args.preset
@@ -302,6 +323,12 @@ async fn handle_live(
                 .clone()
                 .unwrap_or_else(|| "Parakeet TDT 0.6B v3".to_string()),
         )
+    } else if is_parakeet_ultra {
+        Some(
+            args.model
+                .clone()
+                .unwrap_or_else(|| "Parakeet Ultra 0.6B INT8".to_string()),
+        )
     } else {
         resolve_model_path(args.model.as_deref())
             .ok()
@@ -315,6 +342,8 @@ async fn handle_live(
             "Moonshine v2 (Ergodic Linear Attention)".to_string()
         } else if is_parakeet {
             "NVIDIA Parakeet TDT 0.6B v3 (CoreML ANE)".to_string()
+        } else if is_parakeet_ultra {
+            "NVIDIA Parakeet Ultra 0.6B (CoreML ANE)".to_string()
         } else {
             provider_label(args)
         },
@@ -332,6 +361,7 @@ async fn handle_live(
         apple: is_apple,
         moonshine: is_moonshine,
         parakeet: is_parakeet,
+        parakeet_ultra: is_parakeet_ultra,
     };
     let transcript = run_live_subtitles(Arc::new(transcriber), config).await?;
 
@@ -406,6 +436,7 @@ async fn main() -> Result<()> {
     let is_apple = args.apple;
     let is_moonshine = args.moonshine;
     let is_parakeet = args.parakeet || args.provider == ProviderKind::Parakeet;
+    let is_parakeet_ultra = args.parakeet_ultra || args.provider == ProviderKind::ParakeetUltra;
     let has_existing_audio_file = args
         .audio
         .as_deref()
@@ -413,10 +444,16 @@ async fn main() -> Result<()> {
     let is_live = args.live
         || args.apple
         || args.moonshine
-        || (args.parakeet && !has_existing_audio_file);
+        || (args.parakeet && !has_existing_audio_file)
+        || (args.parakeet_ultra && !has_existing_audio_file);
 
     // If --preset was passed (e.g. with --live or file transcription), ensure whisper-server is running
-    let managed_server = if !is_apple && !is_moonshine && !is_parakeet && args.preset.is_some() {
+    let managed_server = if !is_apple
+        && !is_moonshine
+        && !is_parakeet
+        && !is_parakeet_ultra
+        && args.preset.is_some()
+    {
         let preset = args.preset.unwrap();
         let cfg = ServerConfig {
             preset,
@@ -431,16 +468,17 @@ async fn main() -> Result<()> {
         None
     };
 
-    let transcriber: Box<dyn Transcriber> = if is_apple || is_moonshine || is_parakeet {
-        Box::new(CustomApiProvider::new(
-            "http://localhost:8080".to_string(),
-            None,
-            None,
-            args.lang.clone(),
-        ))
-    } else {
-        create_transcriber(&args)?
-    };
+    let transcriber: Box<dyn Transcriber> =
+        if is_apple || is_moonshine || is_parakeet || (is_parakeet_ultra && is_live) {
+            Box::new(CustomApiProvider::new(
+                "http://localhost:8080".to_string(),
+                None,
+                None,
+                args.lang.clone(),
+            ))
+        } else {
+            create_transcriber(&args)?
+        };
 
     if is_live {
         return handle_live(&args, transcriber, managed_server).await;

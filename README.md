@@ -2,7 +2,7 @@
 
 A command-line tool in Rust for audio file transcription and real-time macOS system audio subtitles.
 
-Works with on-device engines (Apple Speech, NVIDIA Parakeet CoreML, whisper.cpp, Moonshine) as well as cloud Speech-to-Text APIs (Groq, OpenAI, Deepgram) and self-hosted OpenAI-compatible endpoints.
+Works with on-device engines (Apple Speech, NVIDIA Parakeet CoreML & Parakeet Ultra, whisper.cpp, Moonshine) as well as cloud Speech-to-Text APIs (Groq, OpenAI, Deepgram) and self-hosted OpenAI-compatible endpoints.
 
 ---
 
@@ -46,8 +46,9 @@ cargo install --path . --features moonshine
 # Uses Groq cloud by default (requires GROQ_API_KEY environment variable)
 whisper audio.mp3
 
-# Or transcribe locally using Parakeet (macOS Apple Silicon)
+# Or transcribe locally using Parakeet / Parakeet Ultra (macOS Apple Silicon)
 whisper -p parakeet audio.mp3
+whisper -p parakeet-ultra -l de audio.mp3
 ```
 By default, this writes `.txt`, `.srt`, and `.vtt` subtitle files in the same directory as the audio file.
 
@@ -57,6 +58,9 @@ Capture system audio in real time (from YouTube, Crunchyroll, meetings, or any a
 ```bash
 # Using Apple Speech on Apple Neural Engine (no model download needed):
 whisper --apple -l en
+
+# Using NVIDIA Parakeet Ultra on Apple Neural Engine (25 European languages):
+whisper --parakeet-ultra -l de
 
 # Or using local Whisper with automatic model download:
 whisper --live --preset live -l en
@@ -75,6 +79,7 @@ Depending on the engine you use, models are handled differently:
 | **Apple Speech** | `--apple` | Apple Neural Engine (macOS) | **No download needed.** Uses built-in macOS speech assets. (If a language isn't installed, enable it in macOS Dictation settings). |
 | **Local Whisper** | `--live --preset <name>` or `--serve` | Apple Metal GPU / CPU | **Auto-downloads on prompt.** If the model file is not found in `~/.cache/whisper-models/`, the CLI prompts to download it from Hugging Face. |
 | **Parakeet** | `--parakeet` or `-p parakeet` | Apple Neural Engine CoreML | **Auto-prompts to install.** Uses `macparakeet-cli`. If missing, prompts to install via Homebrew and downloads the model automatically. |
+| **Parakeet Ultra** | `--parakeet-ultra` or `-p parakeet-ultra` | Apple Neural Engine CoreML | **Auto-downloads on first run.** Fetches `FluidInference/parakeet-ultra-coreml` into `~/Library/Application Support/FluidAudio/Models/`. |
 | **Moonshine** | `--moonshine` | ONNX Runtime | **Auto-downloads on first run.** Caches models in `~/.cache/whisper-models/moonshine/`. |
 | **Cloud APIs** | Default, `-p openai`, `-p deepgram` | Cloud servers | **No local models.** Requires setting the corresponding API key. |
 
@@ -119,6 +124,7 @@ whisper -p deepgram audio.mp3
 
 # Local providers:
 whisper -p parakeet audio.mp3
+whisper -p parakeet-ultra -l de audio.mp3
 whisper -p custom -u http://localhost:8080 audio.mp3
 ```
 
@@ -158,7 +164,17 @@ whisper --parakeet -l en
 whisper --parakeet -l es
 ```
 
-#### 3. Local Whisper Server (`--live --preset <preset>`)
+#### 3. NVIDIA Parakeet Ultra (`--parakeet-ultra`)
+Post-trained Parakeet TDT 0.6B (`moondream/parakeet-ultra`) running natively on the Apple Neural Engine at the same speed as Parakeet v3 with improved accuracy across all 25 European languages (including German). Works in-process for both live streaming and file transcription (including `--karaoke` word timestamps) without external CLI dependencies.
+```bash
+# Live German streaming
+whisper --parakeet-ultra -l de
+
+# Transcribe a file offline with Parakeet Ultra
+whisper -p parakeet-ultra -l de audio.mp3
+```
+
+#### 4. Local Whisper Server (`--live --preset <preset>`)
 Spawns and manages a local `whisper-server` process with optimized presets:
 ```bash
 # Real-time subtitle preset
@@ -168,14 +184,14 @@ whisper --live --preset live -l en
 whisper --live --preset balanced -l es
 ```
 
-#### 4. Moonshine Streaming (`--moonshine`)
+#### 5. Moonshine Streaming (`--moonshine`)
 Runs the Moonshine v2 ONNX engine (requires building with `--features moonshine`):
 ```bash
 whisper --moonshine -l en
 whisper --moonshine -l es
 ```
 
-#### 5. Cloud Live Streaming (`--live -p groq`)
+#### 6. Cloud Live Streaming (`--live -p groq`)
 Sends rolling audio chunks to cloud APIs:
 ```bash
 whisper --live -p groq -l en
@@ -204,7 +220,7 @@ whisper --live -p groq -l en
 
 ## Browser Extension Subtitles
 
-When running any live subtitle mode (`--apple`, `--parakeet`, `--moonshine`, or `--live`), the CLI broadcasts a live Server-Sent Events (SSE) subtitle stream to:
+When running any live subtitle mode (`--apple`, `--parakeet`, `--parakeet-ultra`, `--moonshine`, or `--live`), the CLI broadcasts a live Server-Sent Events (SSE) subtitle stream to:
 
 ```text
 http://127.0.0.1:8989/events
@@ -294,20 +310,21 @@ Arguments:
   [AUDIO]  Path to the audio file to transcribe (or output base name in live mode)
 
 Options:
-  -p, --provider <PROVIDER>        Speech-to-Text provider (groq, openai, deepgram, parakeet, custom) [default: groq]
+  -p, --provider <PROVIDER>        Speech-to-Text provider (groq, openai, deepgram, parakeet, parakeet-ultra, custom) [default: groq]
   -m, --model <MODEL>              Name or path of model to use
   -l, --lang <LANG>                Language code (ISO 639-1, e.g. 'en', 'es', 'ja')
 
 Live & Streaming:
       --apple                      Use native Apple Speech on Apple Neural Engine (macOS only)
       --parakeet                   Use NVIDIA Parakeet TDT CoreML via MacParakeet (macOS only)
+      --parakeet-ultra             Use NVIDIA Parakeet Ultra CoreML on Apple Neural Engine (macOS only)
       --moonshine                  Use Moonshine v2 streaming ONNX engine
       --live                       Capture macOS system audio in real time
       --speech                     Wait for speaker sentence pauses and filter background SFX/music
       --test-audio                 Test system audio capture with terminal waveform monitor
       --chunk-secs <CHUNK_SECS>    Maximum audio chunk duration in seconds for live mode
       --sub-port <SUB_PORT>        Port for HTTP/SSE subtitle broadcasting [default: 8989]
-  -q, --silent                     Headless mode (disables terminal HUD to reduce CPU usage)
+  -q, --silent                     Headless mode (--headless; disables terminal HUD to reduce CPU usage)
 
 Server & Presets:
       --serve [<PRESET>]           Launch whisper-server in foreground (balanced, live, fast, realtime, accurate)

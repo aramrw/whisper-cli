@@ -207,6 +207,9 @@ pub async fn run_live_subtitles(
     if config.parakeet {
         return crate::live::engine_parakeet::run_live_parakeet(config).await;
     }
+    if config.parakeet_ultra {
+        return crate::live::engine_parakeet_ultra::run_live_parakeet_ultra(config).await;
+    }
 
     let (_stream, mut audio_rx) = MacOsAudioStream::start()?;
     let session_start = Instant::now();

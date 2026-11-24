@@ -5,6 +5,7 @@ pub mod engine_apple;
 // pub mod engine_lfm;
 pub mod engine_moonshine;
 pub mod engine_parakeet;
+pub mod engine_parakeet_ultra;
 pub mod engine_vad;
 pub mod hud;
 pub mod ramp;
@@ -19,6 +20,7 @@ pub use engine_apple::*;
 // pub use engine_lfm::*;
 pub use engine_moonshine::*;
 pub use engine_parakeet::*;
+pub use engine_parakeet_ultra::*;
 pub use engine_vad::*;
 pub use hud::*;
 pub use ramp::*;
@@ -149,5 +151,66 @@ mod tests {
         let (s2_final, e2_final) = tracker.resolve_clip_bounds(1.5, 1.7, 4000, true);
         assert_eq!(s2_final, 1500);
         assert_eq!(s2_final + 1700, e2_final);
+    }
+
+    #[test]
+    fn test_parakeet_ultra_speech_callback_partial_final_dedup_and_hallucination() {
+        use std::collections::VecDeque;
+        use std::ffi::{c_void, CString};
+        use std::sync::{Arc, Mutex};
+        use std::time::Instant;
+
+        let (bcast_tx, mut bcast_rx) = tokio::sync::broadcast::channel::<String>(16);
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let sub_history = Arc::new(Mutex::new(VecDeque::with_capacity(8)));
+        let cb_state = Arc::new(ParakeetUltraCbState {
+            event_tx,
+            sub_broadcast_tx: Some(bcast_tx),
+            sub_history: Some(Arc::clone(&sub_history)),
+            last_id: Arc::new(Mutex::new("cue-1".to_string())),
+            last_finalized_text: Arc::new(Mutex::new(String::new())),
+            start_instant: Instant::now(),
+            all_utterances: Arc::new(Mutex::new(Vec::new())),
+        });
+        let ptr = Arc::as_ptr(&cb_state) as *mut c_void;
+
+        // 1. Partial callback broadcasts with isFinal: false
+        let p_txt = CString::new("Hallo").unwrap();
+        parakeet_ultra_speech_callback(ptr, p_txt.as_ptr(), false, 1.0, 0.56, 12.0);
+        let msg = bcast_rx.try_recv().expect("expected partial SSE broadcast");
+        let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
+        assert_eq!(parsed["text"], "Hallo");
+        assert_eq!(parsed["isFinal"], false);
+        assert_eq!(parsed["id"], "cue-1");
+        assert!(matches!(
+            event_rx.try_recv().unwrap(),
+            ParakeetUltraSpeechEvent::Partial { preview } if preview == "Hallo"
+        ));
+
+        // 2. Hallucination tag is filtered
+        let h_txt = CString::new("[Music]").unwrap();
+        parakeet_ultra_speech_callback(ptr, h_txt.as_ptr(), true, 1.5, 0.5, 5.0);
+        assert!(bcast_rx.try_recv().is_err());
+        assert!(event_rx.try_recv().is_err());
+
+        // 3. Final callback broadcasts with isFinal: true and records history
+        let f_txt = CString::new("Hallo Welt.").unwrap();
+        parakeet_ultra_speech_callback(ptr, f_txt.as_ptr(), true, 1.0, 1.4, 18.0);
+        let msg = bcast_rx.try_recv().expect("expected final SSE broadcast");
+        let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
+        assert_eq!(parsed["text"], "Hallo Welt.");
+        assert_eq!(parsed["isFinal"], true);
+        assert_eq!(parsed["id"], "cue-1");
+        assert_eq!(sub_history.lock().unwrap().len(), 1);
+        assert!(matches!(
+            event_rx.try_recv().unwrap(),
+            ParakeetUltraSpeechEvent::Final { text, decode_ms: 18, .. } if text == "Hallo Welt."
+        ));
+
+        // 4. Case-insensitive duplicate final line is suppressed
+        let dup_txt = CString::new("hallo welt.").unwrap();
+        parakeet_ultra_speech_callback(ptr, dup_txt.as_ptr(), true, 2.5, 1.0, 10.0);
+        assert!(bcast_rx.try_recv().is_err());
+        assert!(event_rx.try_recv().is_err());
     }
 }
