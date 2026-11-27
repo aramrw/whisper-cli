@@ -182,7 +182,7 @@ struct ParakeetCbState {
     sub_broadcast_tx: Option<tokio::sync::broadcast::Sender<String>>,
     sub_history: Option<Arc<Mutex<VecDeque<serde_json::Value>>>>,
     last_id: Arc<Mutex<String>>,
-    last_finalized_text: Arc<Mutex<String>>,
+    last_finalized_text: Arc<Mutex<(String, i64)>>,
     start_instant: Instant,
     all_utterances: Arc<Mutex<Vec<Utternace>>>,
 }
@@ -201,31 +201,8 @@ pub extern "C" fn parakeet_speech_callback(
     let c_str = unsafe { CStr::from_ptr(text_ptr) };
     let Ok(text) = c_str.to_str() else { return };
     let text = text.trim();
-    if text.is_empty() || is_hallucination(text) {
-        return;
-    }
 
     let state = unsafe { &*(ctx as *const ParakeetCbState) };
-    {
-        let mut last_fin = state.last_finalized_text.lock().unwrap();
-        if is_final {
-            if text.eq_ignore_ascii_case(last_fin.as_str()) {
-                return;
-            }
-            *last_fin = text.to_string();
-        }
-    }
-
-    let now_ms = state.start_instant.elapsed().as_millis() as i64;
-    let start_ms = (segment_start_sec * 1000.0).max(0.0) as i64;
-    let duration_ms = (duration_sec * 1000.0).max(120.0) as u64;
-    let end_ms = start_ms + duration_ms as i64;
-    let lag_ms = (now_ms - end_ms).max(0) as u64;
-    let decode_ms = decode_ms_f64.round().max(1.0) as u64;
-
-    let ts = format_timestamp(start_ms / 10, false, ".");
-    let short_ts = ts.split('.').next().unwrap_or(&ts).to_string();
-
     let cue_id = {
         let mut id_lock = state.last_id.lock().unwrap();
         if is_final {
@@ -236,6 +213,30 @@ pub extern "C" fn parakeet_speech_callback(
             id_lock.clone()
         }
     };
+
+    if text.is_empty() || is_hallucination(text) {
+        return;
+    }
+
+    let now_ms = state.start_instant.elapsed().as_millis() as i64;
+    {
+        let mut last_fin = state.last_finalized_text.lock().unwrap();
+        if is_final {
+            if text.eq_ignore_ascii_case(last_fin.0.as_str()) && (now_ms - last_fin.1) < 1500 {
+                return;
+            }
+            *last_fin = (text.to_string(), now_ms);
+        }
+    }
+
+    let start_ms = (segment_start_sec * 1000.0).max(0.0) as i64;
+    let duration_ms = (duration_sec * 1000.0).max(120.0) as u64;
+    let end_ms = start_ms + duration_ms as i64;
+    let lag_ms = (now_ms - end_ms).max(0) as u64;
+    let decode_ms = decode_ms_f64.round().max(1.0) as u64;
+
+    let ts = format_timestamp(start_ms / 10, false, ".");
+    let short_ts = ts.split('.').next().unwrap_or(&ts).to_string();
 
     let cue = serde_json::json!({
         "id": cue_id,
@@ -337,7 +338,7 @@ pub async fn run_live_parakeet(config: LiveConfig) -> Result<Transcript> {
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<ParakeetSpeechEvent>();
     let all_utterances = Arc::new(Mutex::new(Vec::new()));
     let last_id = Arc::new(Mutex::new(uuid::Uuid::new_v4().to_string()));
-    let last_finalized_text = Arc::new(Mutex::new(String::new()));
+    let last_finalized_text = Arc::new(Mutex::new((String::new(), -10_000)));
 
     let cb_state = Arc::new(ParakeetCbState {
         event_tx,

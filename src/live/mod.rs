@@ -168,7 +168,7 @@ mod tests {
             sub_broadcast_tx: Some(bcast_tx),
             sub_history: Some(Arc::clone(&sub_history)),
             last_id: Arc::new(Mutex::new("cue-1".to_string())),
-            last_finalized_text: Arc::new(Mutex::new(String::new())),
+            last_finalized_text: Arc::new(Mutex::new((String::new(), -10_000))),
             start_instant: Instant::now(),
             all_utterances: Arc::new(Mutex::new(Vec::new())),
         });
@@ -187,13 +187,7 @@ mod tests {
             ParakeetUltraSpeechEvent::Partial { preview } if preview == "Hallo"
         ));
 
-        // 2. Hallucination tag is filtered
-        let h_txt = CString::new("[Music]").unwrap();
-        parakeet_ultra_speech_callback(ptr, h_txt.as_ptr(), true, 1.5, 0.5, 5.0);
-        assert!(bcast_rx.try_recv().is_err());
-        assert!(event_rx.try_recv().is_err());
-
-        // 3. Final callback broadcasts with isFinal: true and records history
+        // 2. Final callback broadcasts with isFinal: true and records history (same cue-1 as partial)
         let f_txt = CString::new("Hallo Welt.").unwrap();
         parakeet_ultra_speech_callback(ptr, f_txt.as_ptr(), true, 1.0, 1.4, 18.0);
         let msg = bcast_rx.try_recv().expect("expected final SSE broadcast");
@@ -207,10 +201,28 @@ mod tests {
             ParakeetUltraSpeechEvent::Final { text, decode_ms: 18, .. } if text == "Hallo Welt."
         ));
 
-        // 4. Case-insensitive duplicate final line is suppressed
+        // 3. Hallucination tag is filtered, AND final hallucination still rotates cue ID
+        let h_txt = CString::new("[Music]").unwrap();
+        parakeet_ultra_speech_callback(ptr, h_txt.as_ptr(), true, 1.5, 0.5, 5.0);
+        assert!(bcast_rx.try_recv().is_err());
+        assert!(event_rx.try_recv().is_err());
+
+        // 4. Case-insensitive duplicate final line within 1500ms is suppressed AND rotates cue ID
         let dup_txt = CString::new("hallo welt.").unwrap();
         parakeet_ultra_speech_callback(ptr, dup_txt.as_ptr(), true, 2.5, 1.0, 10.0);
         assert!(bcast_rx.try_recv().is_err());
         assert!(event_rx.try_recv().is_err());
+
+        // 5. Identical final line >1500ms later (e.g. re-record) IS emitted with a fresh UUID
+        {
+            let mut last_fin = cb_state.last_finalized_text.lock().unwrap();
+            last_fin.1 -= 2000;
+        }
+        parakeet_ultra_speech_callback(ptr, dup_txt.as_ptr(), true, 2.5, 1.0, 10.0);
+        let msg2 = bcast_rx.try_recv().expect("expected re-recorded final SSE broadcast");
+        let parsed2: serde_json::Value = serde_json::from_str(&msg2).unwrap();
+        assert_eq!(parsed2["text"], "hallo welt.");
+        assert_eq!(parsed2["isFinal"], true);
+        assert_ne!(parsed2["id"], "cue-1");
     }
 }

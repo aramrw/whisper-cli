@@ -18,7 +18,10 @@ pub async fn start_sub_server(
         loop {
             let (mut socket, _) = match listener.accept().await {
                 Ok(conn) => conn,
-                Err(_) => break,
+                Err(_) => {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    continue;
+                }
             };
             let _ = socket.set_nodelay(true);
 
@@ -107,7 +110,10 @@ retry: 1000\r\n\
                         return;
                     }
 
-                    let mut ping_interval = tokio::time::interval(Duration::from_secs(15));
+                    let mut ping_interval = tokio::time::interval_at(
+                        tokio::time::Instant::now() + Duration::from_secs(10),
+                        Duration::from_secs(10),
+                    );
                     loop {
                         tokio::select! {
                             msg = sub_rx.recv() => {
@@ -123,7 +129,7 @@ retry: 1000\r\n\
                                 }
                             }
                             _ = ping_interval.tick() => {
-                                if socket.write_all(b":keep-alive\n\n").await.is_err() {
+                                if socket.write_all(b"data: {\"type\":\"ping\"}\n\n").await.is_err() {
                                     break;
                                 }
                             }
